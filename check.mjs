@@ -1,7 +1,6 @@
-// Checks Apple's in-store pickup availability for the iPhone Duo 256GB at every
-// Apple store in Texas (and 512GB at the Austin stores) and sends a push
-// notification through Pushover when it turns available. Austin stores get a
-// high-priority alert; other Texas stores get a normal one.
+// Checks Apple's in-store pickup availability for the iPhone Duo 256GB and 512GB
+// at the two Austin stores (Barton Creek and Domain Northside) and sends a
+// high-priority push notification through Pushover when it turns available.
 //
 // Usage (needs PUSHOVER_USER and PUSHOVER_TOKEN set):
 //   node check.mjs                 # normal check
@@ -23,16 +22,10 @@ const PARTS = {
   "MK1H4LL/A": "iPhone Duo 512GB Night Sky",
 };
 
-// These parts are only tracked at the Austin stores.
-const AUSTIN_ONLY_PARTS = new Set(["MK1G4LL/A", "MK1H4LL/A"]);
-
-// Apple returns the 12 stores nearest to a ZIP code. These three cover all 17
-// Texas stores: Austin + San Antonio + Houston, Dallas-Fort Worth, and El Paso.
-const LOCATIONS = ["78701", "75201", "79901"];
-const STATE = "TX";
-
-// High-priority alerts for these stores.
-const AUSTIN_STORES = new Set(["R085", "R216"]); // Barton Creek, Domain Northside
+// Apple returns the 12 stores nearest to this ZIP (downtown Austin), which
+// includes both Austin stores. Only the stores listed below are kept.
+const LOCATION = "78701";
+const STORES = new Set(["R085", "R216"]); // Barton Creek, Domain Northside
 
 const BUY_URL = "https://www.apple.com/shop/buy-iphone/iphone-duo";
 // Opens the buy page with this model's storage and color already selected.
@@ -69,24 +62,17 @@ async function fetchStores(location) {
   return stores;
 }
 
-// Any failed request fails the whole check. A partial result would make stores
-// drop out and come back, which could trigger duplicate alerts.
 async function fetchAvailability() {
-  const responses = await Promise.all(LOCATIONS.map(fetchStores));
+  const stores = await fetchStores(LOCATION);
 
-  // { "R085|MK1E4LL/A": { available, austin, store, model, quote } }
+  // { "R085|MK1E4LL/A": { available, store, model, quote, link } }
   const result = {};
-  for (const store of responses.flat()) {
-    if (store.state !== STATE) continue;
-    const austin = AUSTIN_STORES.has(store.storeNumber);
+  for (const store of stores) {
+    if (!STORES.has(store.storeNumber)) continue;
     for (const part of Object.keys(PARTS)) {
-      if (!austin && AUSTIN_ONLY_PARTS.has(part)) continue;
-      const key = `${store.storeNumber}|${part}`;
-      if (result[key]) continue; // same store returned by several locations
       const pa = store.partsAvailability?.[part];
-      result[key] = {
+      result[`${store.storeNumber}|${part}`] = {
         available: pa?.pickupDisplay === "available",
-        austin,
         store: `${store.storeName} (${store.city})`,
         model: PARTS[part],
         quote: pa?.pickupSearchQuote ?? "unknown",
@@ -94,8 +80,11 @@ async function fetchAvailability() {
       };
     }
   }
-  const austinFound = Object.values(result).some((v) => v.austin);
-  if (!austinFound) throw new Error("Austin stores missing from Apple response");
+  // A store missing from one check and back in the next would re-trigger its
+  // alerts, so treat a missing store as a failed check.
+  const found = new Set(Object.keys(result).map((k) => k.split("|")[0]));
+  const missing = [...STORES].filter((s) => !found.has(s));
+  if (missing.length) throw new Error(`Store(s) missing from Apple response: ${missing.join(", ")}`);
   return result;
 }
 
@@ -136,7 +125,7 @@ async function saveState(prev, next) {
 function describe(items) {
   const esc = (t) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const lines = items.map(
-    // The title already says "iPhone Duo", so lines stay short enough to list all Austin items.
+    // The title already says "iPhone Duo", so lines stay short enough to list all items.
     (v) => `<a href="${v.link}">${esc(`${v.model.replace(/^iPhone Duo /, "")} @ ${v.store}`)}</a>: ${esc(v.quote)}`
   );
   let message = "";
@@ -172,38 +161,24 @@ async function checkOnce() {
 
   const items = Object.values(current);
   const availableCount = items.filter((v) => v.available).length;
-  const storeCount = new Set(items.map((v) => v.store)).size;
-  console.log(`Checked ${storeCount} Texas stores, ${availableCount} available`);
+  console.log(`Checked ${STORES.size} Austin stores, ${availableCount} available`);
   for (const v of items) {
-    if (v.austin || v.available) {
-      console.log(`${v.available ? "AVAILABLE" : "-"}\t${v.model} @ ${v.store}: ${v.quote}`);
-    }
+    console.log(`${v.available ? "AVAILABLE" : "-"}\t${v.model} @ ${v.store}: ${v.quote}`);
   }
 
   const newlyAvailable = Object.entries(current)
     .filter(([key, v]) => v.available && !prev.availability?.[key])
     .map(([, v]) => v);
-  const austin = newlyAvailable.filter((v) => v.austin);
-  const elsewhere = newlyAvailable.filter((v) => !v.austin);
 
-  if (austin.length) {
+  if (newlyAvailable.length) {
     await notify({
       title: "iPhone Duo available for pickup in Austin!",
-      message: describe(austin),
-      url: austin[0].link,
+      message: describe(newlyAvailable),
+      url: newlyAvailable[0].link,
       html: true,
     });
+    console.log(`Sent alert for ${newlyAvailable.length} item(s)`);
   }
-  if (elsewhere.length) {
-    await notify({
-      title: "iPhone Duo available elsewhere in Texas",
-      message: describe(elsewhere),
-      url: elsewhere[0].link,
-      html: true,
-      priority: 0,
-    });
-  }
-  if (newlyAvailable.length) console.log(`Sent alert for ${newlyAvailable.length} item(s)`);
 
   const availability = Object.fromEntries(
     Object.entries(current).map(([k, v]) => [k, v.available])

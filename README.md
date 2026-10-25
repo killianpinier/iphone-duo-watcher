@@ -1,20 +1,18 @@
 # iPhone Duo watcher (Austin, TX)
 
-Checks in-store pickup availability for the **iPhone Duo 256GB** (Star White and
-Night Sky) at all 17 Apple stores in Texas, plus the **512GB** models at the two
-Austin stores. When a store goes from unavailable
-to available, it sends a push notification through [Pushover](https://pushover.net):
-
-- **Austin** (Barton Creek, Domain Northside): high-priority alert with sound.
-- **Elsewhere in Texas** (San Antonio, Houston, Dallas-Fort Worth, El Paso): normal alert.
+Checks in-store pickup availability for the **iPhone Duo 256GB and 512GB**
+(Star White and Night Sky) at the two Austin Apple stores, Barton Creek and
+Domain Northside. When a model goes from unavailable to available, it sends a
+high-priority push notification through [Pushover](https://pushover.net). Each
+line in the alert links to that model's buy page.
 
 Each run checks 3 times, 20 seconds apart, so with the every-minute trigger
 below you get a check every 20 seconds. To go back to once a minute (fewer
 requests to Apple), set the repo variable `CHECKS_PER_RUN` to `1`:
 `gh variable set CHECKS_PER_RUN --body 1`.
 
-Apple returns the 12 nearest stores per ZIP code, so each check queries three
-ZIPs (78701, 75201, 79901), which together cover every Texas store.
+Each check is one request to Apple for ZIP 78701, whose nearest stores include
+both Austin stores.
 
 - `check.mjs`: the checker. It has no dependencies and needs Node 18 or newer.
 - `.github/workflows/check.yml`: runs the checker on GitHub Actions.
@@ -54,8 +52,7 @@ node check.mjs --test-notify  # send a test push
 CHECKS_PER_RUN=3 node check.mjs  # 3 checks, 20 seconds apart
 ```
 
-To watch other models, edit `PARTS` in `check.mjs` (add a part to
-`AUSTIN_ONLY_PARTS` to watch it only in Austin). 1TB: `MK1J4LL/A`, `MK1L4LL/A`. 2TB: `MK1Q4LL/A`, `MK1R4LL/A`.
+To watch other models, edit `PARTS` in `check.mjs`. 1TB: `MK1J4LL/A`, `MK1L4LL/A`. 2TB: `MK1Q4LL/A`, `MK1R4LL/A`.
 
 ## Stopping it
 
