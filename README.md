@@ -1,9 +1,14 @@
 # iPhone Duo watcher (Austin, TX)
 
 Checks in-store pickup availability for the **iPhone Duo 256GB** (Star White and
-Night Sky) at Apple **Barton Creek** and **Domain Northside**. When either store
-goes from unavailable to available, it sends a push notification through
-[Pushover](https://pushover.net).
+Night Sky) at all 17 Apple stores in Texas. When a store goes from unavailable
+to available, it sends a push notification through [Pushover](https://pushover.net):
+
+- **Austin** (Barton Creek, Domain Northside): high-priority alert with sound.
+- **Elsewhere in Texas** (San Antonio, Houston, Dallas-Fort Worth, El Paso): normal alert.
+
+Apple returns the 12 nearest stores per ZIP code, so each check queries three
+ZIPs (78701, 75201, 79901), which together cover every Texas store.
 
 - `check.mjs`: the checker. It has no dependencies and needs Node 18 or newer.
 - `.github/workflows/check.yml`: runs the checker on GitHub Actions.

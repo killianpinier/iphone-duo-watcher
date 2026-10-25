@@ -1,5 +1,7 @@
-// Checks Apple's in-store pickup availability for the iPhone Duo 256GB in
-// Austin, TX and sends a push notification through Pushover when it turns available.
+// Checks Apple's in-store pickup availability for the iPhone Duo 256GB at every
+// Apple store in Texas and sends a push notification through Pushover when it
+// turns available. Austin stores get a high-priority alert; other Texas stores
+// get a normal one.
 //
 // Usage (needs PUSHOVER_USER and PUSHOVER_TOKEN set):
 //   node check.mjs                 # normal check
@@ -15,13 +17,14 @@ const PARTS = {
   "MK1F4LL/A": "iPhone Duo 256GB Night Sky",
 };
 
-// Apple stores in Austin. The API also returns San Antonio/Houston stores; we ignore those.
-const STORES = {
-  R085: "Barton Creek",
-  R216: "Domain Northside",
-};
+// Apple returns the 12 stores nearest to a ZIP code. These three cover all 17
+// Texas stores: Austin + San Antonio + Houston, Dallas-Fort Worth, and El Paso.
+const LOCATIONS = ["78701", "75201", "79901"];
+const STATE = "TX";
 
-const LOCATION = "78701";
+// High-priority alerts for these stores.
+const AUSTIN_STORES = new Set(["R085", "R216"]); // Barton Creek, Domain Northside
+
 const BUY_URL = "https://www.apple.com/shop/buy-iphone/iphone-duo";
 const STATE_FILE = new URL("./state.json", import.meta.url);
 // Warn once if Apple has been unreachable for this long, so failures aren't silent.
@@ -33,8 +36,8 @@ if (!PUSHOVER_USER || !PUSHOVER_TOKEN) {
   process.exit(1);
 }
 
-async function fetchAvailability() {
-  const params = new URLSearchParams({ pl: "true", location: LOCATION });
+async function fetchStores(location) {
+  const params = new URLSearchParams({ pl: "true", location });
   Object.keys(PARTS).forEach((p, i) => params.set(`parts.${i}`, p));
 
   const res = await fetch(`https://www.apple.com/shop/retail/pickup-message?${params}`, {
@@ -46,25 +49,36 @@ async function fetchAvailability() {
     },
     signal: AbortSignal.timeout(20_000),
   });
-  if (!res.ok) throw new Error(`Apple returned HTTP ${res.status}`);
+  if (!res.ok) throw new Error(`Apple returned HTTP ${res.status} for ${location}`);
   const stores = (await res.json())?.body?.stores;
-  if (!Array.isArray(stores)) throw new Error("Unexpected response shape from Apple");
+  if (!Array.isArray(stores)) throw new Error(`Unexpected response shape from Apple for ${location}`);
+  return stores;
+}
 
-  // { "R085|MK1E4LL/A": { available, store, model, quote } }
+// Any failed request fails the whole check. A partial result would make stores
+// drop out and come back, which could trigger duplicate alerts.
+async function fetchAvailability() {
+  const responses = await Promise.all(LOCATIONS.map(fetchStores));
+
+  // { "R085|MK1E4LL/A": { available, austin, store, model, quote } }
   const result = {};
-  for (const store of stores) {
-    if (!STORES[store.storeNumber]) continue;
+  for (const store of responses.flat()) {
+    if (store.state !== STATE) continue;
     for (const part of Object.keys(PARTS)) {
+      const key = `${store.storeNumber}|${part}`;
+      if (result[key]) continue; // same store returned by several locations
       const pa = store.partsAvailability?.[part];
-      result[`${store.storeNumber}|${part}`] = {
+      result[key] = {
         available: pa?.pickupDisplay === "available",
-        store: STORES[store.storeNumber],
+        austin: AUSTIN_STORES.has(store.storeNumber),
+        store: `${store.storeName} (${store.city})`,
         model: PARTS[part],
         quote: pa?.pickupSearchQuote ?? "unknown",
       };
     }
   }
-  if (Object.keys(result).length === 0) throw new Error("No Austin stores in Apple response");
+  const austinFound = Object.values(result).some((v) => v.austin);
+  if (!austinFound) throw new Error("Austin stores missing from Apple response");
   return result;
 }
 
@@ -99,6 +113,18 @@ async function saveState(prev, next) {
   console.log("State changed, saved state.json");
 }
 
+// Pushover rejects messages over 1,024 characters, so long lists get cut short.
+function describe(items) {
+  const lines = items.map((v) => `${v.model} @ Apple ${v.store}: ${v.quote}`);
+  let message = "";
+  for (const [i, line] of lines.entries()) {
+    const more = `\n…and ${lines.length - i} more`;
+    if ((message + "\n" + line).length + more.length > 1024) return message + more;
+    message += (message ? "\n" : "") + line;
+  }
+  return message;
+}
+
 async function main() {
   if (process.argv.includes("--test-notify")) {
     await notify({
@@ -130,20 +156,32 @@ async function main() {
     return;
   }
 
-  for (const v of Object.values(current)) {
-    console.log(`${v.available ? "AVAILABLE" : "-"}\t${v.model} @ ${v.store}: ${v.quote}`);
+  const items = Object.values(current);
+  const availableCount = items.filter((v) => v.available).length;
+  console.log(`Checked ${items.length / Object.keys(PARTS).length} Texas stores, ${availableCount} available`);
+  for (const v of items) {
+    if (v.austin || v.available) {
+      console.log(`${v.available ? "AVAILABLE" : "-"}\t${v.model} @ ${v.store}: ${v.quote}`);
+    }
   }
 
-  const newlyAvailable = Object.entries(current).filter(
-    ([key, v]) => v.available && !prev.availability?.[key]
-  );
-  if (newlyAvailable.length) {
-    await notify({
-      title: "iPhone Duo available for pickup in Austin!",
-      message: newlyAvailable.map(([, v]) => `${v.model} @ Apple ${v.store} (${v.quote})`).join("\n"),
-    });
-    console.log(`Sent alert for ${newlyAvailable.length} item(s)`);
+  const newlyAvailable = Object.entries(current)
+    .filter(([key, v]) => v.available && !prev.availability?.[key])
+    .map(([, v]) => v);
+  const austin = newlyAvailable.filter((v) => v.austin);
+  const elsewhere = newlyAvailable.filter((v) => !v.austin);
+
+  if (austin.length) {
+    await notify({ title: "iPhone Duo available for pickup in Austin!", message: describe(austin) });
   }
+  if (elsewhere.length) {
+    await notify({
+      title: "iPhone Duo available elsewhere in Texas",
+      message: describe(elsewhere),
+      priority: 0,
+    });
+  }
+  if (newlyAvailable.length) console.log(`Sent alert for ${newlyAvailable.length} item(s)`);
 
   const availability = Object.fromEntries(
     Object.entries(current).map(([k, v]) => [k, v.available])
