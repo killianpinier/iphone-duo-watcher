@@ -35,6 +35,8 @@ const STATE = "TX";
 const AUSTIN_STORES = new Set(["R085", "R216"]); // Barton Creek, Domain Northside
 
 const BUY_URL = "https://www.apple.com/shop/buy-iphone/iphone-duo";
+// Opens the buy page with this model's storage and color already selected.
+const productUrl = (part) => `https://www.apple.com/shop/product/${part}`;
 const STATE_FILE = new URL("./state.json", import.meta.url);
 // Warn once if Apple has been unreachable for this long, so failures aren't silent.
 const FAILURE_ALERT_MS = 20 * 60 * 1000;
@@ -88,6 +90,7 @@ async function fetchAvailability() {
         store: `${store.storeName} (${store.city})`,
         model: PARTS[part],
         quote: pa?.pickupSearchQuote ?? "unknown",
+        link: productUrl(part),
       };
     }
   }
@@ -97,7 +100,7 @@ async function fetchAvailability() {
 }
 
 // Pushover priority 1 = high: makes a sound and gets through Pushover's quiet hours.
-async function notify({ title, message, priority = 1 }) {
+async function notify({ title, message, priority = 1, url = BUY_URL, html = false }) {
   const res = await fetch("https://api.pushover.net/1/messages.json", {
     method: "POST",
     body: new URLSearchParams({
@@ -106,8 +109,9 @@ async function notify({ title, message, priority = 1 }) {
       title,
       message,
       priority: String(priority),
-      url: BUY_URL,
+      url,
       url_title: "Open Apple Store",
+      html: html ? "1" : "0",
     }),
   });
   if (!res.ok) throw new Error(`Pushover failed: HTTP ${res.status} ${await res.text()}`);
@@ -128,8 +132,13 @@ async function saveState(prev, next) {
 }
 
 // Pushover rejects messages over 1,024 characters, so long lists get cut short.
+// Each line links to that model's buy page (Pushover HTML message).
 function describe(items) {
-  const lines = items.map((v) => `${v.model} @ Apple ${v.store}: ${v.quote}`);
+  const esc = (t) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const lines = items.map(
+    // The title already says "iPhone Duo", so lines stay short enough to list all Austin items.
+    (v) => `<a href="${v.link}">${esc(`${v.model.replace(/^iPhone Duo /, "")} @ ${v.store}`)}</a>: ${esc(v.quote)}`
+  );
   let message = "";
   for (const [i, line] of lines.entries()) {
     const more = `\n…and ${lines.length - i} more`;
@@ -178,12 +187,19 @@ async function checkOnce() {
   const elsewhere = newlyAvailable.filter((v) => !v.austin);
 
   if (austin.length) {
-    await notify({ title: "iPhone Duo available for pickup in Austin!", message: describe(austin) });
+    await notify({
+      title: "iPhone Duo available for pickup in Austin!",
+      message: describe(austin),
+      url: austin[0].link,
+      html: true,
+    });
   }
   if (elsewhere.length) {
     await notify({
       title: "iPhone Duo available elsewhere in Texas",
       message: describe(elsewhere),
+      url: elsewhere[0].link,
+      html: true,
       priority: 0,
     });
   }
