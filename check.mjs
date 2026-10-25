@@ -1,9 +1,9 @@
 // Checks Apple's in-store pickup availability for the iPhone Duo 256GB in
-// Austin, TX and sends a push notification through ntfy when it turns available.
+// Austin, TX and sends a push notification through Pushover when it turns available.
 //
-// Usage:
-//   NTFY_TOPIC=... node check.mjs                 # normal check
-//   NTFY_TOPIC=... node check.mjs --test-notify   # send a test push and exit
+// Usage (needs PUSHOVER_USER and PUSHOVER_TOKEN set):
+//   node check.mjs                 # normal check
+//   node check.mjs --test-notify   # send a test push and exit
 //
 // State is kept in state.json so you only get alerted when a store goes
 // from unavailable to available, not on every run.
@@ -27,9 +27,9 @@ const STATE_FILE = new URL("./state.json", import.meta.url);
 // Warn once if Apple has been unreachable for this long, so failures aren't silent.
 const FAILURE_ALERT_MS = 20 * 60 * 1000;
 
-const TOPIC = process.env.NTFY_TOPIC;
-if (!TOPIC) {
-  console.error("NTFY_TOPIC is not set");
+const { PUSHOVER_USER, PUSHOVER_TOKEN } = process.env;
+if (!PUSHOVER_USER || !PUSHOVER_TOKEN) {
+  console.error("PUSHOVER_USER and PUSHOVER_TOKEN must be set");
   process.exit(1);
 }
 
@@ -68,13 +68,21 @@ async function fetchAvailability() {
   return result;
 }
 
-async function notify({ title, message, priority = "urgent", tags = "iphone,rotating_light" }) {
-  const res = await fetch(`https://ntfy.sh/${TOPIC}`, {
+// Pushover priority 1 = high: makes a sound and gets through Pushover's quiet hours.
+async function notify({ title, message, priority = 1 }) {
+  const res = await fetch("https://api.pushover.net/1/messages.json", {
     method: "POST",
-    body: message,
-    headers: { Title: title, Priority: priority, Tags: tags, Click: BUY_URL },
+    body: new URLSearchParams({
+      token: PUSHOVER_TOKEN,
+      user: PUSHOVER_USER,
+      title,
+      message,
+      priority: String(priority),
+      url: BUY_URL,
+      url_title: "Open Apple Store",
+    }),
   });
-  if (!res.ok) throw new Error(`ntfy failed: HTTP ${res.status}`);
+  if (!res.ok) throw new Error(`Pushover failed: HTTP ${res.status} ${await res.text()}`);
 }
 
 async function loadState() {
@@ -96,8 +104,7 @@ async function main() {
     await notify({
       title: "iPhone Duo watcher test",
       message: "If you see this, notifications are working.",
-      priority: "default",
-      tags: "white_check_mark",
+      priority: 0,
     });
     console.log("Test notification sent");
     return;
@@ -114,8 +121,7 @@ async function main() {
       await notify({
         title: "iPhone Duo watcher is failing",
         message: `Can't reach Apple's availability API: ${err.message}`,
-        priority: "default",
-        tags: "warning",
+        priority: 0,
       });
       next.failureAlerted = true;
     }

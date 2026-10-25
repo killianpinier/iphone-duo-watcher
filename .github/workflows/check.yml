@@ -3,6 +3,11 @@ name: Check iPhone Duo pickup
 on:
   # Main trigger: cron-job.org calls the GitHub API every minute (see README).
   workflow_dispatch:
+    inputs:
+      test_notify:
+        description: "Send a test notification instead of checking"
+        type: boolean
+        default: false
   # Backup in case the external pinger stops. GitHub often runs this late.
   schedule:
     - cron: "*/10 * * * *"
@@ -28,8 +33,9 @@ jobs:
 
       - name: Check availability
         env:
-          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
-        run: node check.mjs
+          PUSHOVER_USER: ${{ secrets.PUSHOVER_USER }}
+          PUSHOVER_TOKEN: ${{ secrets.PUSHOVER_TOKEN }}
+        run: node check.mjs ${{ inputs.test_notify && '--test-notify' || '' }}
 
       # Commit state.json only when it changed, so alerts aren't repeated.
       - name: Save state

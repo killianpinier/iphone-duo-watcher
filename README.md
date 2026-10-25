@@ -3,7 +3,7 @@
 Checks in-store pickup availability for the **iPhone Duo 256GB** (Star White and
 Night Sky) at Apple **Barton Creek** and **Domain Northside**. When either store
 goes from unavailable to available, it sends a push notification through
-[ntfy](https://ntfy.sh).
+[Pushover](https://pushover.net).
 
 - `check.mjs`: the checker. It has no dependencies and needs Node 18 or newer.
 - `.github/workflows/check.yml`: runs the checker on GitHub Actions.
@@ -15,8 +15,9 @@ warning notification.
 
 ## Setup
 
-1. **Phone:** install the ntfy app and subscribe to your topic name, which is
-   stored as the `NTFY_TOPIC` repo secret.
+1. **Phone:** install the Pushover app and sign in. From <https://pushover.net>,
+   copy your **User Key**, then create an application to get an **API Token**.
+   Store them as the `PUSHOVER_USER` and `PUSHOVER_TOKEN` repo secrets.
 2. **Every-minute trigger:** GitHub's built-in schedule often runs 10-30 minutes
    late, so an external pinger triggers the workflow instead.
    - Create a fine-grained GitHub token at
@@ -36,8 +37,9 @@ warning notification.
 ## Local use
 
 ```sh
-NTFY_TOPIC=your-topic node check.mjs                # one check
-NTFY_TOPIC=your-topic node check.mjs --test-notify  # send a test push
+export PUSHOVER_USER=... PUSHOVER_TOKEN=...
+node check.mjs                # one check
+node check.mjs --test-notify  # send a test push
 ```
 
 To watch other models, edit `PARTS` in `check.mjs`. 512GB: `MK1G4LL/A`,
