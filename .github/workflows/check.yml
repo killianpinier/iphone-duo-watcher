@@ -35,6 +35,9 @@ jobs:
         env:
           PUSHOVER_USER: ${{ secrets.PUSHOVER_USER }}
           PUSHOVER_TOKEN: ${{ secrets.PUSHOVER_TOKEN }}
+          # Checks per run, 20 seconds apart. Set the CHECKS_PER_RUN repo
+          # variable to 1 to check once a minute instead.
+          CHECKS_PER_RUN: ${{ vars.CHECKS_PER_RUN || '3' }}
         run: node check.mjs ${{ inputs.test_notify && '--test-notify' || '' }}
 
       # Commit state.json only when it changed, so alerts aren't repeated.

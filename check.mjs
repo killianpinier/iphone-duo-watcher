@@ -1,11 +1,15 @@
 // Checks Apple's in-store pickup availability for the iPhone Duo 256GB at every
-// Apple store in Texas and sends a push notification through Pushover when it
-// turns available. Austin stores get a high-priority alert; other Texas stores
-// get a normal one.
+// Apple store in Texas (and 512GB at the Austin stores) and sends a push
+// notification through Pushover when it turns available. Austin stores get a
+// high-priority alert; other Texas stores get a normal one.
 //
 // Usage (needs PUSHOVER_USER and PUSHOVER_TOKEN set):
 //   node check.mjs                 # normal check
 //   node check.mjs --test-notify   # send a test push and exit
+//
+// CHECKS_PER_RUN (default 1) runs several checks in one go, CHECK_INTERVAL_SECONDS
+// (default 20) apart. With a run triggered every minute, 3 checks per run means
+// a check every 20 seconds.
 //
 // State is kept in state.json so you only get alerted when a store goes
 // from unavailable to available, not on every run.
@@ -15,7 +19,12 @@ import { readFile, writeFile } from "node:fs/promises";
 const PARTS = {
   "MK1E4LL/A": "iPhone Duo 256GB Star White",
   "MK1F4LL/A": "iPhone Duo 256GB Night Sky",
+  "MK1G4LL/A": "iPhone Duo 512GB Star White",
+  "MK1H4LL/A": "iPhone Duo 512GB Night Sky",
 };
+
+// These parts are only tracked at the Austin stores.
+const AUSTIN_ONLY_PARTS = new Set(["MK1G4LL/A", "MK1H4LL/A"]);
 
 // Apple returns the 12 stores nearest to a ZIP code. These three cover all 17
 // Texas stores: Austin + San Antonio + Houston, Dallas-Fort Worth, and El Paso.
@@ -29,6 +38,9 @@ const BUY_URL = "https://www.apple.com/shop/buy-iphone/iphone-duo";
 const STATE_FILE = new URL("./state.json", import.meta.url);
 // Warn once if Apple has been unreachable for this long, so failures aren't silent.
 const FAILURE_ALERT_MS = 20 * 60 * 1000;
+
+const CHECKS_PER_RUN = Math.max(1, parseInt(process.env.CHECKS_PER_RUN, 10) || 1);
+const CHECK_INTERVAL_MS = (parseInt(process.env.CHECK_INTERVAL_SECONDS, 10) || 20) * 1000;
 
 const { PUSHOVER_USER, PUSHOVER_TOKEN } = process.env;
 if (!PUSHOVER_USER || !PUSHOVER_TOKEN) {
@@ -64,13 +76,15 @@ async function fetchAvailability() {
   const result = {};
   for (const store of responses.flat()) {
     if (store.state !== STATE) continue;
+    const austin = AUSTIN_STORES.has(store.storeNumber);
     for (const part of Object.keys(PARTS)) {
+      if (!austin && AUSTIN_ONLY_PARTS.has(part)) continue;
       const key = `${store.storeNumber}|${part}`;
       if (result[key]) continue; // same store returned by several locations
       const pa = store.partsAvailability?.[part];
       result[key] = {
         available: pa?.pickupDisplay === "available",
-        austin: AUSTIN_STORES.has(store.storeNumber),
+        austin,
         store: `${store.storeName} (${store.city})`,
         model: PARTS[part],
         quote: pa?.pickupSearchQuote ?? "unknown",
@@ -125,17 +139,9 @@ function describe(items) {
   return message;
 }
 
-async function main() {
-  if (process.argv.includes("--test-notify")) {
-    await notify({
-      title: "iPhone Duo watcher test",
-      message: "If you see this, notifications are working.",
-      priority: 0,
-    });
-    console.log("Test notification sent");
-    return;
-  }
-
+// One check: fetch, alert on newly available items, save state.
+// Returns false if Apple couldn't be reached.
+async function checkOnce() {
   const prev = await loadState();
   let current;
   try {
@@ -152,13 +158,13 @@ async function main() {
       next.failureAlerted = true;
     }
     await saveState(prev, next);
-    process.exitCode = 1;
-    return;
+    return false;
   }
 
   const items = Object.values(current);
   const availableCount = items.filter((v) => v.available).length;
-  console.log(`Checked ${items.length / Object.keys(PARTS).length} Texas stores, ${availableCount} available`);
+  const storeCount = new Set(items.map((v) => v.store)).size;
+  console.log(`Checked ${storeCount} Texas stores, ${availableCount} available`);
   for (const v of items) {
     if (v.austin || v.available) {
       console.log(`${v.available ? "AVAILABLE" : "-"}\t${v.model} @ ${v.store}: ${v.quote}`);
@@ -187,6 +193,29 @@ async function main() {
     Object.entries(current).map(([k, v]) => [k, v.available])
   );
   await saveState(prev, { availability });
+  return true;
+}
+
+async function main() {
+  if (process.argv.includes("--test-notify")) {
+    await notify({
+      title: "iPhone Duo watcher test",
+      message: "If you see this, notifications are working.",
+      priority: 0,
+    });
+    console.log("Test notification sent");
+    return;
+  }
+
+  // Checks are spaced from the start of the run, so a slow Apple response
+  // doesn't push later checks back.
+  const start = Date.now();
+  for (let i = 0; i < CHECKS_PER_RUN; i++) {
+    const wait = start + i * CHECK_INTERVAL_MS - Date.now();
+    if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+    if (CHECKS_PER_RUN > 1) console.log(`\n— Check ${i + 1} of ${CHECKS_PER_RUN} —`);
+    if (!(await checkOnce())) process.exitCode = 1;
+  }
 }
 
 await main();
